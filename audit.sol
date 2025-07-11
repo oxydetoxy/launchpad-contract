@@ -15,6 +15,7 @@ import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 contract BambiPods is ERC721, ERC721Enumerable, ERC721Pausable, Ownable, ERC721Burnable,ReentrancyGuard {
 
     error SupplyNotAvailable();
+    error InvalidMintSupply();
     error InvalidPhase();
     error InvalidPhaseLength();
     error AlreadyAllocated();
@@ -39,7 +40,6 @@ contract BambiPods is ERC721, ERC721Enumerable, ERC721Pausable, Ownable, ERC721B
     uint256 public mintedSupply;
     uint256 public maxMintableSupply;
 
-    bool public reallocated;
     string private baseUri;
 
     struct MintPhase {
@@ -60,6 +60,10 @@ contract BambiPods is ERC721, ERC721Enumerable, ERC721Pausable, Ownable, ERC721B
 
     modifier hasSupply(uint256 phaseIndex, uint256 quantity) {
         MintPhase memory phase = mintPhases[phaseIndex];
+
+        if(maxMintableSupply==0){
+            revert SupplyNotAvailable();
+        }
   
         if (
             phase.mintableSupply > 0 &&
@@ -129,6 +133,10 @@ contract BambiPods is ERC721, ERC721Enumerable, ERC721Pausable, Ownable, ERC721B
             revert InvalidFundsReceiver();
         }
 
+        if (_maxMintableSupply == 0) {
+            revert InvalidMintSupply();
+        }
+
         baseUri=_baseUri;
         royaltyReceiver = _royalityReceiver;
         royaltyPercentage = _royalityPercent;
@@ -145,6 +153,13 @@ contract BambiPods is ERC721, ERC721Enumerable, ERC721Pausable, Ownable, ERC721B
         baseUri=_baseUri;
     }
 
+    function setMaxMintableSupply(uint256 _maxMintableSupply) external onlyOwner {
+        if (_maxMintableSupply == 0 || _maxMintableSupply < mintedSupply) {
+            revert InvalidMintSupply();
+        }
+        maxMintableSupply = _maxMintableSupply;
+    }
+
     function _baseURI() internal view override returns (string memory) {
         return baseUri;
     }
@@ -157,14 +172,11 @@ contract BambiPods is ERC721, ERC721Enumerable, ERC721Pausable, Ownable, ERC721B
         _unpause();
     }
 
-    function transferFrom(address from, address to, uint256 tokenId) public virtual override(ERC721, IERC721) {
-        revert TransferNotAllowed();
-    }
-
     function setMintPhases(MintPhase[] calldata newPhases) external onlyOwner {
         delete mintPhases;
+
         for (uint256 i = 0; i < newPhases.length; i++) {
-            if (newPhases[i].startTime > newPhases[i].endTime) {
+            if (newPhases[i].startTime > newPhases[i].endTime || newPhases[i].mintableSupply == 0) {
                 revert InvalidPhase();
             }
             mintPhases.push(newPhases[i]);
@@ -220,38 +232,6 @@ contract BambiPods is ERC721, ERC721Enumerable, ERC721Pausable, Ownable, ERC721B
         bool valid = MerkleProof.verify(merkleProof, merkleRoot, leaf);
         if (!valid) {
             revert InvalidProof();
-        }
-    }
-
-    function reallocatePendingSupplyToLastPhase() external onlyOwner {
-        if(reallocated){
-            revert AlreadyAllocated();
-        }
-
-        if(block.timestamp > mintPhases[mintPhases.length - 1].startTime){
-            revert LastPhaseAlreadyStarted();
-        }
-
-        if(mintPhases.length <= 1){
-            revert InvalidPhaseLength();
-        }
-
-        uint256 totalPending = 0;
-
-        // Accumulate unused supply from all phases except the last
-        for (uint256 i = 0; i < mintPhases.length - 1; i++) {
-            uint256 minted = phaseMintedSupply[i];
-            uint256 supply = mintPhases[i].mintableSupply;
-
-            if (supply > minted) {
-                totalPending += (supply - minted);
-            }
-        }
-
-        // Add the pending supply to the last phase
-        if(totalPending > 0){
-            MintPhase storage lastPhase = mintPhases[mintPhases.length - 1];
-            lastPhase.mintableSupply += totalPending;   
         }
     }
 
